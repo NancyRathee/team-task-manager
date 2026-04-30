@@ -144,12 +144,12 @@ app.get('/api/projects/users', auth, adminOnly, async (req, res) => {
 // ========== TASKS ==========
 app.get('/api/tasks', auth, async (req, res) => {
   try {
-    let tasks;
-    if (req.user.role === 'admin') {
-      tasks = await Task.find().populate('project', 'name').populate('assignedTo', 'name email').populate('assignedBy', 'name email');
-    } else {
-      tasks = await Task.find({ assignedTo: req.user.id })
-        .populate('project', 'name').populate('assignedTo', 'name email').populate('assignedBy', 'name email');
+    let tasks = await Task.find()
+      .populate('project', 'name')
+      .populate('assignedTo', 'name email')
+      .populate('assignedBy', 'name email');
+    if (req.user.role !== 'admin') {
+      tasks = tasks.filter(t => t.assignedTo && t.assignedTo._id.toString() === req.user.id);
     }
     res.json(tasks);
   } catch (err) {
@@ -194,8 +194,12 @@ app.get('/api/dashboard', auth, async (req, res) => {
       tasks = await Task.find();
       projects = await Project.find();
     } else {
-      tasks = await Task.find({ assignedTo: req.user.id });
-      projects = await Project.find({ $or: [{ owner: req.user.id }, { members: req.user.id }] });
+      // Get all tasks then filter
+      const allTasks = await Task.find().populate('assignedTo', 'name email');
+      tasks = allTasks.filter(t => t.assignedTo && t.assignedTo._id.toString() === req.user.id);
+      projects = await Project.find({
+        $or: [{ owner: req.user.id }, { members: req.user.id }]
+      });
     }
     const now = new Date();
     const total = tasks.length;
