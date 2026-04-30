@@ -8,8 +8,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Use separate database for this project (safe)
-mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URL || 'mongodb://localhost:27017/taskmanager_assessment')
+// Use Railway's MONGO_URL or fallback
+const mongoURI = process.env.MONGO_URL || process.env.MONGODB_URI || 'mongodb://localhost:27017/taskmanager_assessment';
+mongoose.connect(mongoURI)
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('MongoDB error:', err));
 
@@ -20,7 +21,6 @@ const userSchema = new mongoose.Schema({
   password: String,
   role: { type: String, default: 'member' }
 });
-
 const projectSchema = new mongoose.Schema({
   name: String,
   description: String,
@@ -28,7 +28,6 @@ const projectSchema = new mongoose.Schema({
   members: [String],
   status: { type: String, default: 'active' }
 });
-
 const taskSchema = new mongoose.Schema({
   title: String,
   description: String,
@@ -50,7 +49,7 @@ const auth = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: 'No token' });
   try {
-    const decoded = jwt.verify(token, 'secret');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
     req.user = decoded;
     next();
   } catch {
@@ -76,7 +75,7 @@ app.post('/api/auth/signup', async (req, res) => {
     if (existing) return res.status(400).json({ message: 'User exists' });
     const hashed = await bcrypt.hash(password, 10);
     const user = await User.create({ name, email, password: hashed, role: role || 'member' });
-    const token = jwt.sign({ id: user._id, role: user.role }, 'secret', { expiresIn: '30d' });
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'secret', { expiresIn: '30d' });
     res.json({ _id: user._id, name: user.name, email: user.email, role: user.role, token });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -90,7 +89,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ message: 'Invalid credentials' });
-    const token = jwt.sign({ id: user._id, role: user.role }, 'secret', { expiresIn: '30d' });
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'secret', { expiresIn: '30d' });
     res.json({ _id: user._id, name: user.name, email: user.email, role: user.role, token });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -104,9 +103,8 @@ app.get('/api/projects', auth, async (req, res) => {
     if (req.user.role === 'admin') {
       projects = await Project.find().populate('owner', 'name').populate('members', 'name');
     } else {
-      projects = await Project.find({
-        $or: [{ owner: req.user.id }, { members: req.user.id }]
-      }).populate('owner', 'name').populate('members', 'name');
+      projects = await Project.find({ $or: [{ owner: req.user.id }, { members: req.user.id }] })
+        .populate('owner', 'name').populate('members', 'name');
     }
     res.json(projects);
   } catch (err) {
@@ -124,11 +122,8 @@ app.post('/api/projects', auth, adminOnly, async (req, res) => {
 app.put('/api/projects/:id', auth, adminOnly, async (req, res) => {
   try {
     const { name, description, members, status } = req.body;
-    const updated = await Project.findByIdAndUpdate(
-      req.params.id,
-      { name, description, members, status },
-      { new: true }
-    ).populate('owner', 'name').populate('members', 'name');
+    const updated = await Project.findByIdAndUpdate(req.params.id, { name, description, members, status }, { new: true })
+      .populate('owner', 'name').populate('members', 'name');
     if (!updated) return res.status(404).json({ message: 'Project not found' });
     res.json(updated);
   } catch (err) {
@@ -151,18 +146,10 @@ app.get('/api/tasks', auth, async (req, res) => {
   try {
     let tasks;
     if (req.user.role === 'admin') {
-      tasks = await Task.find()
-        .populate('project', 'name')
-        .populate('assignedTo', 'name email')
-        .populate('assignedBy', 'name email');
+      tasks = await Task.find().populate('project', 'name').populate('assignedTo', 'name email').populate('assignedBy', 'name email');
     } else {
-      // Use string comparison to avoid ObjectId issues
-      tasks = await Task.find()
-        .populate('project', 'name')
-        .populate('assignedTo', 'name email')
-        .populate('assignedBy', 'name email');
-      // Filter in JavaScript for simplicity (works with mixed ID types)
-      tasks = tasks.filter(t => t.assignedTo && t.assignedTo._id.toString() === req.user.id);
+      tasks = await Task.find({ assignedTo: req.user.id })
+        .populate('project', 'name').populate('assignedTo', 'name email').populate('assignedBy', 'name email');
     }
     res.json(tasks);
   } catch (err) {
@@ -172,21 +159,15 @@ app.get('/api/tasks', auth, async (req, res) => {
 
 app.post('/api/tasks', auth, async (req, res) => {
   const task = await Task.create({ ...req.body, assignedBy: req.user.id });
-  const populated = await Task.findById(task._id)
-    .populate('project', 'name')
-    .populate('assignedTo', 'name email')
-    .populate('assignedBy', 'name email');
+  const populated = await Task.findById(task._id).populate('project', 'name').populate('assignedTo', 'name email').populate('assignedBy', 'name email');
   res.json(populated);
 });
 
 app.put('/api/tasks/:id', auth, adminOnly, async (req, res) => {
   try {
     const { title, description, assignedTo, priority, dueDate, status } = req.body;
-    const updated = await Task.findByIdAndUpdate(
-      req.params.id,
-      { title, description, assignedTo, priority, dueDate, status },
-      { new: true }
-    ).populate('project', 'name').populate('assignedTo', 'name email');
+    const updated = await Task.findByIdAndUpdate(req.params.id, { title, description, assignedTo, priority, dueDate, status }, { new: true })
+      .populate('project', 'name').populate('assignedTo', 'name email');
     if (!updated) return res.status(404).json({ message: 'Task not found' });
     res.json(updated);
   } catch (err) {
@@ -195,11 +176,8 @@ app.put('/api/tasks/:id', auth, adminOnly, async (req, res) => {
 });
 
 app.patch('/api/tasks/:id/status', auth, async (req, res) => {
-  const task = await Task.findByIdAndUpdate(
-    req.params.id,
-    { status: req.body.status },
-    { new: true }
-  ).populate('project', 'name').populate('assignedTo', 'name email');
+  const task = await Task.findByIdAndUpdate(req.params.id, { status: req.body.status }, { new: true })
+    .populate('project', 'name').populate('assignedTo', 'name email');
   res.json(task);
 });
 
@@ -208,7 +186,7 @@ app.delete('/api/tasks/:id', auth, adminOnly, async (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-// ========== DASHBOARD (FIXED for members) ==========
+// ========== DASHBOARD ==========
 app.get('/api/dashboard', auth, async (req, res) => {
   try {
     let tasks, projects;
@@ -216,28 +194,21 @@ app.get('/api/dashboard', auth, async (req, res) => {
       tasks = await Task.find();
       projects = await Project.find();
     } else {
-      // Member: get tasks assigned to them
-      const allTasks = await Task.find().populate('assignedTo', 'name email');
-      tasks = allTasks.filter(t => t.assignedTo && t.assignedTo._id.toString() === req.user.id);
-      // Member: get projects they are owner or member of
-      projects = await Project.find({
-        $or: [{ owner: req.user.id }, { members: req.user.id }]
-      });
+      tasks = await Task.find({ assignedTo: req.user.id });
+      projects = await Project.find({ $or: [{ owner: req.user.id }, { members: req.user.id }] });
     }
-
-    const totalTasks = tasks.length;
-    const completed = tasks.filter(t => t.status === 'completed').length;
     const now = new Date();
-
+    const total = tasks.length;
+    const completed = tasks.filter(t => t.status === 'completed').length;
     res.json({
       stats: {
         totalProjects: projects.length,
-        totalTasks: totalTasks,
+        totalTasks: total,
         completedTasks: completed,
         pendingTasks: tasks.filter(t => t.status === 'pending').length,
         inProgressTasks: tasks.filter(t => t.status === 'in-progress').length,
         overdueTasks: tasks.filter(t => new Date(t.dueDate) < now && t.status !== 'completed').length,
-        completionRate: totalTasks ? ((completed / totalTasks) * 100).toFixed(1) : 0
+        completionRate: total ? ((completed / total) * 100).toFixed(1) : 0
       },
       recentTasks: tasks.slice(-5),
       overdueTasks: tasks.filter(t => new Date(t.dueDate) < now && t.status !== 'completed')
@@ -247,5 +218,5 @@ app.get('/api/dashboard', auth, async (req, res) => {
   }
 });
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
