@@ -9,7 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 // Use separate database for this project (safe)
-mongoose.connect('mongodb://localhost:27017/taskmanager_assessment')
+mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URL || 'mongodb://localhost:27017/taskmanager_assessment')
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('MongoDB error:', err));
 
